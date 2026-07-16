@@ -18,6 +18,9 @@ const BASE = {
 
 const mean = a => a.reduce((s, x) => s + x, 0) / Math.max(1, a.length);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const avg = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : Infinity;
+const sameParams = (a, b) => a && b && a.k === b.k && a.betaScale === b.betaScale && a.placeHandi === b.placeHandi;
+const pushRecent = (a, v, n = 120) => { a.push(v); if (a.length > n) a.splice(0, a.length - n); };
 
 function formRate(c, cond) {
   if (cond === "wet" && c.rate3wet != null && c.rate3good != null)
@@ -123,11 +126,14 @@ export function learnFromResult(model, card, result) {
   const isValidation = splitIsValidation(card.key);
   for (const params of candidateGrid()) {
     const id = paramId(params);
-    const stat = model.candidates[id] ||= { params, trainN: 0, trainLL: 0, valN: 0, valLL: 0 };
+    const stat = model.candidates[id] ||= { params, trainN: 0, trainLL: 0, valN: 0, valLL: 0, trainRecent: [], valRecent: [] };
+    stat.trainRecent = Array.isArray(stat.trainRecent) ? stat.trainRecent : [];
+    stat.valRecent = Array.isArray(stat.valRecent) ? stat.valRecent : [];
     const core = coreScores(card.cars, card.venue, card.cond, card.dist, params);
     const prob = clamp(trifectaProbability(core, actual[0], actual[1], actual[2]), 1e-9, 1);
-    if (isValidation) { stat.valN++; stat.valLL += -Math.log(prob); }
-    else { stat.trainN++; stat.trainLL += -Math.log(prob); }
+    const loss = -Math.log(prob);
+    if (isValidation) { stat.valN++; stat.valLL += loss; pushRecent(stat.valRecent, loss); }
+    else { stat.trainN++; stat.trainLL += loss; pushRecent(stat.trainRecent, loss); }
   }
   const activePrediction = predictRace(card, model.params);
   const actualKey = actual.join("-");
@@ -140,17 +146,63 @@ export function learnFromResult(model, card, result) {
   model.trifectaHit += rank === 1 ? 1 : 0;
   model.logLoss += -Math.log(Math.max(actualProb, 1e-9));
   model.updatedAt = new Date().toISOString();
+  updatePdca(model, card, rank, actualProb, activePrediction.p1.indexOf(Math.max(...activePrediction.p1)) + 1 === actual[0]);
   chooseValidatedParams(model);
   return { rank, probability: actualProb, top: activePrediction.tri[0], isValidation };
 }
 
 function chooseValidatedParams(model) {
-  const stats = Object.values(model.candidates).filter(s => s.trainN >= 40 && s.valN >= 12);
-  if (!stats.length) return;
-  const best = stats.slice().sort((a, b) => a.trainLL / a.trainN - b.trainLL / b.trainN)[0];
-  const base = model.candidates[paramId(model.baseline)] || stats[0];
-  const bestVal = best.valLL / best.valN, baseVal = base.valLL / base.valN;
-  const gain = baseVal > 0 ? (baseVal - bestVal) / baseVal : 0;
-  model.validationGain = gain;
-  if (Number.isFinite(gain) && gain >= 0.01) model.params = { ...best.params };
+  model.pdca ||= { cycles: 0, accepted: 0, rejected: 0, recent: [], rolling: {}, byVenue: {}, byCondition: {}, changeHistory: [] };
+  const pdca = model.pdca;
+  pdca.cycles = (pdca.cycles || 0) + 1;
+  pdca.lastCycleAt = new Date().toISOString();
+  const stats = Object.values(model.candidates).filter(s => s.trainN >= 20 && s.valN >= 6 && s.trainRecent?.length >= 20 && s.valRecent?.length >= 6);
+  if (!stats.length) { pdca.lastDecision = `検証待ち（学習${model.trainCount}R／検証${model.validationCount}R）`; return; }
+  const active = model.candidates[paramId(model.params)] || model.candidates[paramId(model.baseline)] || stats[0];
+  const score = s => 0.72 * avg(s.valRecent) + 0.28 * avg(s.trainRecent);
+  const best = stats.slice().sort((a, b) => score(a) - score(b))[0];
+  const bestScore = score(best), activeScore = score(active);
+  const gain = Number.isFinite(activeScore) && activeScore > 0 ? (activeScore - bestScore) / activeScore : 0;
+  const trainSafe = avg(best.trainRecent) <= avg(active.trainRecent) * 1.02;
+  model.validationGain = Number.isFinite(gain) ? gain : 0;
+  if (!sameParams(best.params, model.params) && gain >= 0.006 && trainSafe) {
+    const from = { ...model.params };
+    model.params = { ...best.params };
+    pdca.accepted = (pdca.accepted || 0) + 1;
+    pdca.lastDecision = `採用：検証損失を${(gain * 100).toFixed(1)}%改善`;
+    pdca.changeHistory ||= [];
+    pdca.changeHistory.push({ at: pdca.lastCycleAt, from, to: { ...best.params }, gain });
+    pdca.changeHistory = pdca.changeHistory.slice(-30);
+  } else {
+    pdca.rejected = (pdca.rejected || 0) + 1;
+    pdca.lastDecision = sameParams(best.params, model.params) ? "現行重みを維持" : `候補を保留（改善${(gain * 100).toFixed(1)}%）`;
+  }
+}
+
+function summarizeRecent(rows) {
+  if (!rows.length) return { n: 0, top1Rate: 0, top10Rate: 0, top30Rate: 0, meanRank: 0, logLoss: 0 };
+  return {
+    n: rows.length,
+    top1Rate: rows.filter(x => x.top1).length / rows.length,
+    top10Rate: rows.filter(x => x.rank > 0 && x.rank <= 10).length / rows.length,
+    top30Rate: rows.filter(x => x.rank > 0 && x.rank <= 30).length / rows.length,
+    meanRank: mean(rows.map(x => x.rank || 336)),
+    logLoss: mean(rows.map(x => -Math.log(clamp(x.probability, 1e-9, 1))))
+  };
+}
+
+function updatePdca(model, card, rank, probability, top1) {
+  model.pdca ||= { cycles: 0, accepted: 0, rejected: 0, recent: [], rolling: {}, byVenue: {}, byCondition: {}, changeHistory: [] };
+  const pdca = model.pdca;
+  pdca.recent = Array.isArray(pdca.recent) ? pdca.recent : [];
+  pushRecent(pdca.recent, { at: new Date().toISOString(), key: card.key, venue: card.venue, condition: card.cond || "good", rank, probability, top1 }, 200);
+  pdca.rolling = summarizeRecent(pdca.recent);
+  pdca.byVenue = {};
+  pdca.byCondition = {};
+  for (const row of pdca.recent) {
+    (pdca.byVenue[row.venue] ||= []).push(row);
+    (pdca.byCondition[row.condition] ||= []).push(row);
+  }
+  for (const [k, rows] of Object.entries(pdca.byVenue)) pdca.byVenue[k] = summarizeRecent(rows);
+  for (const [k, rows] of Object.entries(pdca.byCondition)) pdca.byCondition[k] = summarizeRecent(rows);
 }
