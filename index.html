@@ -429,8 +429,8 @@ textarea.inp{min-height:104px;resize:vertical;font-family:var(--mono);font-size:
   <!-- ============ 開催一覧 ============ -->
   <div class="view" id="v-list">
     <div class="panel">
-      <div class="ph"><div><div class="ey">本日の開催</div><h2>WINTICKET 取得結果</h2></div>
-        <button class="btn mini" id="listFetch">本日の開催を取得</button></div>
+      <div class="ph"><div><div class="ey">今日のレース</div><h2>開催場・レース一覧</h2></div>
+        <button class="btn mini" id="listFetch">今日のレースを更新</button></div>
       <div class="hint" style="margin-bottom:12px">Rをタップすると出走表を取得して即予想します。試走タイム未発表のレースは取り込めません。</div>
       <div id="raceList"></div>
     </div>
@@ -1990,7 +1990,9 @@ function init(){
       LOG=[];saveLog();renderPDCA();toast('履歴を消去しました');}
   });
   loadLog();
-  $('#listFetch').addEventListener('click',e=>{const b=e.target;b.disabled=true;b.textContent='取得中…';loadToday().finally(()=>{b.disabled=false;b.textContent='本日の開催を取得';});});
+  $('#listFetch').addEventListener('click',async e=>{const b=e.target,old=b.textContent;b.disabled=true;b.textContent='更新中…';
+    try{await updateTodayNow();}catch(err){toast('更新できませんでした');}
+    finally{b.disabled=false;b.textContent=old;}});
   $('#runSim').addEventListener('click',runSim);
   // 起動時デフォルト締切
   const d=new Date(Date.now()+15*60000);
