@@ -32,9 +32,9 @@ function trainOnce(state, card, result, mode) {
   return true;
 }
 
-async function collectCurrent(state) {
+async function collectCurrent(state, maxRaces = 32) {
   const indexHtml = await fetchText(`${WT}/autorace/racecard/`);
-  const races = parseIndex(indexHtml).slice(0, 32);
+  const races = parseIndex(indexHtml).slice(0, maxRaces);
   const cards = await mapLimit(races, 6, async race => {
     const card = parseCard(await fetchText(raceUrl(race)), race);
     if (card.cars.length < 6) return null;
@@ -50,10 +50,10 @@ async function collectCurrent(state) {
   return races;
 }
 
-async function collectPendingResults(state) {
+async function collectPendingResults(state, maxResults = 14) {
   const now = Date.now();
   const pending = Object.values(state.races).filter(r => !r.trained && r.cars?.length >= 6 &&
-    (!r.closeAt || Date.parse(r.closeAt) < now - 4 * 60_000)).slice(0, 14);
+    (!r.closeAt || Date.parse(r.closeAt) < now - 4 * 60_000)).slice(0, maxResults);
   await mapLimit(pending, 4, async card => {
     const result = parseResult(await fetchText(resultUrl(card)), card);
     if (result) trainOnce(state, card, result, "live-snapshot");
@@ -101,15 +101,20 @@ function prune(state) {
   }
 }
 
-export default async () => {
+export default async request => {
   const started = Date.now(), dataStore = await openStore(), state = await loadState(dataStore);
+  const mode = (() => { try { return new URL(request?.url || "https://local/").searchParams.get("mode") || "scheduled"; } catch { return "scheduled"; } })();
+  const manual = mode === "current" || mode === "results";
+  const beforeResults = Object.values(state.races).filter(r => r.result).length;
   state.collector.lastRun = new Date().toISOString();
   state.collector.status = "running";
   try {
-    await collectCurrent(state);
-    await collectPendingResults(state);
-    await discoverBackfill(state);
-    await runBackfill(state);
+    await collectCurrent(state, manual ? 64 : 32);
+    await collectPendingResults(state, mode === "results" ? 64 : 14);
+    if (!manual) {
+      await discoverBackfill(state);
+      await runBackfill(state);
+    }
     prune(state);
     state.collector.status = "ok";
     state.collector.lastSuccess = new Date().toISOString();
@@ -120,10 +125,10 @@ export default async () => {
   }
   state.collector.durationMs = Date.now() - started;
   await saveState(dataStore, state);
-  return new Response(JSON.stringify({ ok: state.collector.status === "ok", collector: state.collector, model: state.model }), {
+  const afterResults = Object.values(state.races).filter(r => r.result).length;
+  return new Response(JSON.stringify({ ok: state.collector.status === "ok", mode, newResults: afterResults - beforeResults, resultsAvailable: afterResults, collector: state.collector, model: state.model }), {
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
   });
 };
 
 export const config = { schedule: "*/15 * * * *" };
-
