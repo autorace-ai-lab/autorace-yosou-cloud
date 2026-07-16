@@ -7,10 +7,11 @@ const VENUES = {
 };
 
 const BASE = {
-  stBase: 0.16, stW: 0.20, formW: 0.030, formBase: 0.45,
-  wetMix: 0.6, shinsaW: 0.0002, shinsaBase: 60,
-  gradeAdj: { S: -0.004, A: 0, B: 0.003 }, recentBase: 4,
-  recentW: 0.002, topLead: 0.008, fW: 0.003,
+  stBase: 0.16, stW: 0.20, formW: 0.045, formBase: 0.45,
+  wetMix: 0.6, shinsaW: 0.00035, shinsaBase: 60,
+  rankBase: 80, rankW: 0.006,
+  gradeAdj: { S: -0.006, A: 0, B: 0.005 }, recentBase: 4,
+  recentW: 0.003, topLead: 0.008, fW: 0.003,
   defHensa: 0.09, defDist: 3100, defT: 3.45, beta: 32,
   betaCond: { good: 1, mudd: 0.89, wet: 0.74 },
   handiCond: { good: 1, mudd: 1.04, wet: 1.10 }, wetNoise: 0.05
@@ -30,8 +31,10 @@ function formRate(c, cond) {
 }
 
 function riderTime(c, p) {
-  if (c.avgRace != null && c.avgShiso != null && c.shiso != null)
-    return c.avgRace + p.k * (c.shiso - c.avgShiso);
+  if (c.avgRace != null && c.avgShiso != null && c.shiso != null) {
+    const trialResidual = clamp(c.shiso - c.avgShiso, -0.06, 0.06);
+    return c.avgRace + p.k * trialResidual;
+  }
   if (c.shiso != null && c.hensa != null) return c.shiso + c.hensa;
   if (c.avgRace != null) return c.avgRace;
   return (Number.isFinite(c.shiso) ? c.shiso : BASE.defT) + BASE.defHensa;
@@ -44,6 +47,8 @@ function effectiveTime(c, cond, p) {
   if (r3 != null) t -= (r3 - BASE.formBase) * BASE.formW;
   if (c.shinsa != null) t -= (c.shinsa - BASE.shinsaBase) * BASE.shinsaW;
   else if (Number.isFinite(c.win)) t -= (c.win - 5.5) * 0.004;
+  if (Number.isFinite(c.rank))
+    t += clamp(Math.log(Math.max(1, c.rank) / BASE.rankBase) * BASE.rankW, -0.012, 0.012);
   t += BASE.gradeAdj[c.grade] ?? 0;
   if (Number.isFinite(c.recentMean)) t += (c.recentMean - BASE.recentBase) * BASE.recentW;
   t += (c.f || 0) * BASE.fW;
@@ -51,7 +56,7 @@ function effectiveTime(c, cond, p) {
 }
 
 export function coreScores(cars, venueId, cond = "good", dist, params = {}) {
-  const p = { k: 0.65, betaScale: 1, placeHandi: 1, ...params };
+  const p = { k: 0.40, betaScale: 1, placeHandi: 1, ...params };
   const venue = VENUES[venueId] || VENUES.kawaguchi;
   const n = cars.length;
   const base = cars.map(c => effectiveTime(c, cond, p));
@@ -106,7 +111,7 @@ export function predictRace(card, params) {
 
 export function candidateGrid() {
   const out = [];
-  for (const k of [0.45, 0.55, 0.65, 0.75, 0.85])
+  for (const k of [0.25, 0.35, 0.40, 0.45, 0.55])
     for (const betaScale of [0.78, 0.90, 1, 1.10, 1.22])
       for (const placeHandi of [0.88, 1, 1.12, 1.24])
         out.push({ k, betaScale, placeHandi });
@@ -139,14 +144,15 @@ export function learnFromResult(model, card, result) {
   const actualKey = actual.join("-");
   const rank = activePrediction.tri.findIndex(x => `${x.a}-${x.b}-${x.c}` === actualKey) + 1;
   const actualProb = activePrediction.tri.find(x => `${x.a}-${x.b}-${x.c}` === actualKey)?.p || 1e-9;
+  const topCarNum = card.cars[activePrediction.p1.indexOf(Math.max(...activePrediction.p1))]?.num;
   model.trained++;
   model.trainCount += isValidation ? 0 : 1;
   model.validationCount += isValidation ? 1 : 0;
-  model.top1Hit += activePrediction.p1.indexOf(Math.max(...activePrediction.p1)) + 1 === actual[0] ? 1 : 0;
+  model.top1Hit += topCarNum === actual[0] ? 1 : 0;
   model.trifectaHit += rank === 1 ? 1 : 0;
   model.logLoss += -Math.log(Math.max(actualProb, 1e-9));
   model.updatedAt = new Date().toISOString();
-  updatePdca(model, card, rank, actualProb, activePrediction.p1.indexOf(Math.max(...activePrediction.p1)) + 1 === actual[0]);
+  updatePdca(model, card, rank, actualProb, topCarNum === actual[0], activePrediction.tri.length);
   chooseValidatedParams(model);
   return { rank, probability: actualProb, top: activePrediction.tri[0], isValidation };
 }
@@ -186,16 +192,17 @@ function summarizeRecent(rows) {
     top1Rate: rows.filter(x => x.top1).length / rows.length,
     top10Rate: rows.filter(x => x.rank > 0 && x.rank <= 10).length / rows.length,
     top30Rate: rows.filter(x => x.rank > 0 && x.rank <= 30).length / rows.length,
-    meanRank: mean(rows.map(x => x.rank || 336)),
+    meanRank: mean(rows.map(x => x.rank || x.triCount || 336)),
     logLoss: mean(rows.map(x => -Math.log(clamp(x.probability, 1e-9, 1))))
   };
 }
 
-function updatePdca(model, card, rank, probability, top1) {
+function updatePdca(model, card, rank, probability, top1, permutationCount) {
   model.pdca ||= { cycles: 0, accepted: 0, rejected: 0, recent: [], rolling: {}, byVenue: {}, byCondition: {}, changeHistory: [] };
   const pdca = model.pdca;
   pdca.recent = Array.isArray(pdca.recent) ? pdca.recent : [];
-  pushRecent(pdca.recent, { at: new Date().toISOString(), key: card.key, venue: card.venue, condition: card.cond || "good", rank, probability, top1 }, 200);
+  pushRecent(pdca.recent, { at: new Date().toISOString(), key: card.key, venue: card.venue, condition: card.cond || "good",
+    fieldSize: card.cars.length, triCount: permutationCount, rank, probability, top1 }, 200);
   pdca.rolling = summarizeRecent(pdca.recent);
   pdca.byVenue = {};
   pdca.byCondition = {};
