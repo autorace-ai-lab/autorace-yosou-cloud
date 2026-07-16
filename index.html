@@ -266,37 +266,32 @@ textarea.inp{min-height:104px;resize:vertical;font-family:var(--mono);font-size:
 
     <div class="panel">
       <div class="ph">
-        <div><div class="ey">STEP 0 — データ取得</div><h2>WINTICKET から自動取り込み</h2></div>
+        <div><div class="ey">かんたん更新</div><h2>今日のレース情報</h2></div>
         <div class="hint mono" id="routeTag" style="font-size:10px"></div>
       </div>
       <div class="row">
-        <button class="btn" style="flex:2" id="todayBtn">本日の開催を取得</button>
-        <button class="btn ghost mini" id="clipBtn">クリップボードから取込</button>
+        <button class="btn" style="flex:1" id="todayBtn">今日のレースを更新</button>
+        <button class="btn ghost" style="flex:1" id="allResultsBtn">確定結果をまとめて取得</button>
       </div>
-      <div class="row" style="margin-top:8px;align-items:center">
-        <button class="btn ghost" style="flex:2" id="refreshBtn">⟳ 最新に更新（試走T・走路）</button>
-        <label class="autolab"><input type="checkbox" id="autoChk"><span>自動更新 60秒</span></label>
-      </div>
+      <div class="hint" id="batchStatus" style="margin-top:8px">更新 → 開催一覧でRを選ぶと、選手と予想を表示します。</div>
+      <details style="margin-top:9px">
+        <summary class="hint" style="cursor:pointer;color:var(--sub)">選択中レースの更新・その他</summary>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <button class="btn ghost mini" style="flex:2" id="refreshBtn">選択中のレースを更新</button>
+          <label class="autolab"><input type="checkbox" id="autoChk"><span>60秒ごと</span></label>
+          <button class="btn grey mini" id="clipBtn">貼り付け取込</button>
+          <button class="btn grey mini" id="openSiteBtn">WINTICKET</button>
+        </div>
+      </details>
       <div class="hint mono" id="lastUpd" style="margin-top:6px;font-size:10px;color:var(--dim)"></div>
       <div class="cloudbox" id="cloudBox">
         <span class="clouddot" id="cloudDot"></span>
-        <div class="cloudtxt"><b id="cloudTitle">クラウド学習を確認中…</b><span id="cloudMeta">Netlify版では、画面を閉じていても15分ごとに取得・検証します。</span></div>
-        <button class="btn ghost mini" id="cloudSyncBtn">今すぐ同期</button>
-      </div>
-      <div class="hint" style="margin-top:8px">
-        取得すると<b style="color:var(--amber-hi)">開催一覧</b>にレースが並びます。Rをタップすると
-        試走T・偏差・ハンデ・ST・ランク・締切・走路まで取り込んで即予想します。
+        <div class="cloudtxt"><b id="cloudTitle">自動更新を確認中…</b><span id="cloudMeta">画面を閉じていても15分ごとに更新・学習します。</span></div>
+        <button class="btn ghost mini" id="cloudSyncBtn">学習も更新</button>
       </div>
       <div id="fetchLog" class="flog" style="display:none"></div>
 
-      <div class="warnbox" style="margin:11px 0 0">
-        <b>データ元と限界。</b> AutoRace.JP は出走表がJS描画のため取得不可でしたが、<b>WINTICKET</b>はHTMLに実データが入るため採用しました。ただしこのファイルを <span class="mono">file://</span> で開いている場合、<b>CORS</b>回避に公開プロキシを経由します（混雑時は失敗し得ます）。確実なのは下の<b>ブックマークレット</b>です。<b>試走タイムは発走30分前ごろ</b>に確定し、それ以前は取得できません。
-      </div>
-
-      <div class="row" style="margin-top:9px">
-        <button class="btn ghost mini" id="bmBtn">ブックマークレット（確実）</button>
-        <button class="btn ghost mini" id="openSiteBtn">WINTICKETを開く</button>
-      </div>
+      <button class="btn ghost mini" id="bmBtn" style="display:none">ブックマークレット</button>
 
       <div id="bmWrap" style="display:none;margin-top:11px">
         <div class="hint" style="line-height:1.75;margin-bottom:8px">
@@ -444,7 +439,9 @@ textarea.inp{min-height:104px;resize:vertical;font-family:var(--mono);font-size:
   <!-- ============ 答え合わせ ============ -->
   <div class="view" id="v-answer">
     <div class="panel">
-      <div class="ph"><div><div class="ey">STEP 3 — 検証</div><h2>結果を取り込んで採点</h2></div></div>
+      <div class="ph"><div><div class="ey">確定結果</div><h2>今日の結果と採点</h2></div>
+        <button class="btn mini" id="allResultsBtnAnswer">確定結果をまとめて取得</button></div>
+      <div id="allResultsSummary" class="hint" style="margin-bottom:11px">まだ確定結果を取得していません。</div>
       <div class="hint" style="margin-bottom:11px">確定後の3連単の車番と配当を入れると、モデルで何位だったか＋的中判定を出し、<b style="color:var(--amber-hi)">履歴に保存</b>します。ここに貯めた結果が「検証/PDCA」タブの採点と再学習に使われます。</div>
       <div class="row">
         <div><label class="fld">1着</label><input class="inp mono" id="ac1" type="number" min="1" max="8" style="text-align:center"></div>
@@ -454,7 +451,7 @@ textarea.inp{min-height:104px;resize:vertical;font-family:var(--mono);font-size:
       </div>
       <div class="row" style="margin-top:11px">
         <button class="btn" style="flex:2" id="checkBtn">採点して履歴に保存</button>
-        <button class="btn ghost mini" id="fetchResBtn">結果を取得（要確認）</button>
+        <button class="btn ghost mini" id="fetchResBtn">選択中の結果を取得</button>
       </div>
       <div id="resLog" class="flog" style="display:none"></div>
       <div id="acResult"></div>
@@ -1022,6 +1019,21 @@ function renderCloudStatus(ok,msg){
   const p=m.params||{};
   $('#cloudMeta').textContent=`最終成功 ${at}／k=${Number(p.k||.65).toFixed(2)} β=${Number(p.betaScale||1).toFixed(2)} 前残り=${Number(p.placeHandi||1).toFixed(2)}／${c.message||''}`;
 }
+function todayCloudRaces(){
+  const key=todayStr().replace(/-/g,'');
+  return (CLOUD?.races||[]).filter(x=>String(x.cup||'').slice(0,8)===key);
+}
+function renderAllResults(){
+  const el=$('#allResultsSummary'); if(!el)return;
+  const all=todayCloudRaces(), done=all.filter(x=>x.result?.trifecta?.length===3);
+  if(!done.length){el.innerHTML=`本日 ${all.length}R確認済み／確定結果はまだありません。`;return;}
+  const rows=done.sort((a,b)=>String(a.closeAt||'').localeCompare(String(b.closeAt||''))).map(x=>{
+    const venue=VENUES.find(v=>v.id===x.venue)?.name||x.venue;
+    const result=x.result;
+    return `<span class="mono" style="display:inline-block;margin:2px 10px 2px 0"><b style="color:var(--sub)">${venue} ${x.r}R</b>　<b style="color:var(--good)">${result.trifecta.join('-')}</b>${result.payout?`　${Number(result.payout).toLocaleString()}円`:''}</span>`;
+  }).join('');
+  el.innerHTML=`<div style="margin-bottom:5px"><b style="color:var(--amber-hi)">本日 ${done.length}R 確定</b>／${all.length}R確認</div>${rows}`;
+}
 async function loadCloudState(){
   if(location.protocol==='file:'){renderCloudStatus(false,'このファイルをNetlifyへ公開すると有効になります。');return false;}
   try{
@@ -1041,21 +1053,43 @@ async function loadCloudState(){
       key:x.key,slug:x.slug,id:x.venue,cup:x.cup,day:x.day,r:x.r,closeAt:x.closeAt
     }));
     if(list.length){WT_RACES=list.sort((a,b)=>String(a.closeAt||'').localeCompare(String(b.closeAt||'')));renderWTList();}
-    renderCloudStatus(true); return true;
+    renderCloudStatus(true); renderAllResults(); return true;
   }catch(e){renderCloudStatus(false,`接続できません: ${e.message}`);return false;}
+}
+async function runCloudCollection(mode='current'){
+  const r=await fetch(`/.netlify/functions/collect-and-train?mode=${encodeURIComponent(mode)}`,{cache:'no-store'});
+  if(!r.ok)throw new Error(`HTTP ${r.status}`);
+  const data=await r.json();
+  if(!data.ok&&data.collector?.status!=='partial')throw new Error(data.collector?.message||'更新に失敗しました');
+  await loadCloudState();
+  return data;
+}
+async function updateTodayNow(){
+  if(location.protocol==='file:'){await loadToday();return;}
+  const data=await runCloudCollection('current');
+  const n=todayCloudRaces().filter(x=>x.cars?.length>=6).length;
+  $('#batchStatus').textContent=`更新完了：本日の出走表 ${n}R`;
+  switchView('list'); toast(`本日の出走表 ${n}Rを更新しました`);
+  return data;
+}
+async function fetchAllResultsNow(){
+  if(location.protocol==='file:'){toast('公開版で利用できます');return;}
+  await runCloudCollection('results');
+  const all=todayCloudRaces(), done=all.filter(x=>x.result?.trifecta?.length===3);
+  $('#batchStatus').textContent=`結果取得：${done.length}R確定／${all.length}R確認`;
+  renderAllResults(); switchView('answer');
+  toast(done.length?`確定結果 ${done.length}Rを取得しました`:'確定結果はまだありません');
 }
 async function syncCloudNow(){
   if(location.protocol==='file:'){toast('Netlify公開版で利用できます');return;}
   const b=$('#cloudSyncBtn'), old=b.textContent;b.disabled=true;b.textContent='同期中…';
   try{
-    const r=await fetch('/.netlify/functions/collect-and-train',{cache:'no-store'});
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
-    await loadCloudState();toast('クラウド同期が完了しました');
+    await runCloudCollection('current');toast('学習データも更新しました');
   }catch(e){renderCloudStatus(false,`同期失敗: ${e.message}`);toast('同期に失敗しました');}
   finally{b.disabled=false;b.textContent=old;}
 }
 function renderWTList(){
-  if(!WT_RACES.length){$('#raceList').innerHTML='<div class="hint">「本日の開催を取得」を押してください。</div>';return;}
+  if(!WT_RACES.length){$('#raceList').innerHTML='<div class="hint">「今日のレースを更新」を押してください。</div>';return;}
   const byV={};
   WT_RACES.forEach(x=>{(byV[x.id]=byV[x.id]||[]).push(x);});
   $('#raceList').innerHTML=Object.entries(byV).map(([id,rs])=>{
@@ -1910,9 +1944,14 @@ function init(){
   initVenueSelect(); makeEntryRows(); renderParams();
   initBookmarklet();
   $('#todayBtn').addEventListener('click',e=>{
-    const b=e.target; b.disabled=true; b.textContent='取得中…';
-    loadToday().finally(()=>{b.disabled=false;b.textContent='本日の開催を取得';});
+    const b=e.target; b.disabled=true; b.textContent='全レース更新中…';
+    updateTodayNow().catch(err=>{toast(`更新失敗: ${err.message}`);$('#batchStatus').textContent='更新に失敗しました。少し待って再度お試しください。';})
+      .finally(()=>{b.disabled=false;b.textContent='今日のレースを更新';});
   });
+  const bindAllResults=id=>$(id)?.addEventListener('click',e=>{const b=e.target;const old=b.textContent;b.disabled=true;b.textContent='全結果を確認中…';
+    fetchAllResultsNow().catch(err=>{toast(`結果取得失敗: ${err.message}`);$('#batchStatus').textContent='結果取得に失敗しました。';})
+      .finally(()=>{b.disabled=false;b.textContent=old;});});
+  bindAllResults('#allResultsBtn'); bindAllResults('#allResultsBtnAnswer');
   $('#clipBtn').addEventListener('click',clipImport);
   $('#refreshBtn').addEventListener('click',async e=>{
     const b=e.target; b.disabled=true; const o=b.textContent; b.textContent='更新中…';
