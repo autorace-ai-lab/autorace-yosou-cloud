@@ -1,8 +1,8 @@
 export const blankState = () => ({
-  version: 2,
+  version: 3,
   model: {
-    params: { k: 0.65, betaScale: 1, placeHandi: 1 },
-    baseline: { k: 0.65, betaScale: 1, placeHandi: 1 },
+    params: { k: 0.40, betaScale: 1, placeHandi: 1 },
+    baseline: { k: 0.40, betaScale: 1, placeHandi: 1 },
     candidates: {}, trained: 0, trainCount: 0, validationCount: 0,
     top1Hit: 0, trifectaHit: 0, logLoss: 0, validationGain: 0,
     pdca: {
@@ -36,6 +36,23 @@ export function normaliseState(value) {
   state.journal = Array.isArray(state.journal) ? state.journal.slice(-500) : [];
   state.collector = { ...base.collector, ...(state.collector || {}) };
   state.collector.backfillQueue = Array.isArray(state.collector.backfillQueue) ? state.collector.backfillQueue.slice(0, 1500) : [];
+  if (Number(value?.version || 0) < 3) {
+    state.version = 3;
+    state.model.params = { ...base.model.params };
+    state.model.baseline = { ...base.model.baseline };
+    state.model.candidates = {};
+    state.model.trainCount = 0;
+    state.model.validationCount = 0;
+    state.model.validationGain = 0;
+    state.model.pdca.recent = [];
+    state.model.pdca.rolling = { ...base.model.pdca.rolling };
+    state.model.pdca.byVenue = {};
+    state.model.pdca.byCondition = {};
+    state.model.pdca.lastDecision = "精度改善v3へ移行（試走の過信を抑制・6〜8車対応）";
+    state.model.pdca.changeHistory = [...state.model.pdca.changeHistory, {
+      at: new Date().toISOString(), type: "model-v3", note: "試走係数を抑え、全国ランク・近況を強化。車立て別に確率を正規化"
+    }].slice(-30);
+  }
   return state;
 }
 
