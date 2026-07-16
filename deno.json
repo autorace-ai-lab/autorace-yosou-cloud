@@ -1,0 +1,11 @@
+{
+  "tasks": {
+    "start": "deno run --allow-all --unstable-kv deno/main.mjs"
+  },
+  "deploy": {
+    "entrypoint": "deno/main.mjs",
+    "runtime": {
+      "memory_limit": "768MiB"
+    }
+  }
+}
