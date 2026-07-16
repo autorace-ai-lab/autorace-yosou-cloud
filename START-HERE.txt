@@ -1,0 +1,17 @@
+Claude Codeへ渡す方法
+=====================
+
+方法1（おすすめ）
+GitHubリポジトリ `hakutsu810-web/autorace-yosou-cloud` をClaude Codeで開きます。
+最初に「CLAUDE.mdを読んでから作業して」と伝えてください。
+
+方法2（ZIPを渡す）
+`autorace-claude-code-handoff.zip` を展開し、そのフォルダーをClaude Codeで開きます。
+`CLAUDE-CODE-PROMPT.txt`を貼り付け、最後に変更内容を書いてください。
+
+本番URL
+https://autorace-yosou-cloud.hakutsu810-web.deno.net/
+
+注意
+APIキー、パスワード、Cookieなどの秘密情報はこの一式に含めていません。
+GitHubやDenoへの公開には、ご自身のログイン済み環境が必要です。
