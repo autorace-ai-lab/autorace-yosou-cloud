@@ -21,7 +21,7 @@ async function collect(mode = "scheduled") {
   return out.response;
 }
 
-Deno.cron("オートレース15分自動更新・PDCA", "*/15 * * * *", {
+Deno.cron("autorace-15min-update-pdca", "*/15 * * * *", {
   backoffSchedule: [30_000, 120_000, 300_000]
 }, async () => { await collect("scheduled"); });
 
