@@ -1,0 +1,11 @@
+{
+  "name": "autorace-yosou-cloud-learning",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@netlify/blobs": "^9.1.2",
+    "cheerio": "^1.0.0"
+  }
+}
+
