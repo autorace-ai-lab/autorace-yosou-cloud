@@ -3,7 +3,7 @@ import { getStore } from "@netlify/blobs";
 export const STORE_NAME = "autorace-yosou-learning-v1";
 
 export const blankState = () => ({
-  version: 3,
+  version: 4,
   model: {
     params: { k: 0.40, betaScale: 1, placeHandi: 1 },
     baseline: { k: 0.40, betaScale: 1, placeHandi: 1 },
@@ -54,8 +54,8 @@ export function normaliseState(value) {
   state.collector = { ...base.collector, ...(state.collector || {}) };
   state.collector.backfillQueue = Array.isArray(state.collector.backfillQueue)
     ? state.collector.backfillQueue.slice(0, 1500) : [];
-  if (Number(value?.version || 0) < 3) {
-    state.version = 3;
+  if (Number(value?.version || 0) < 4) {
+    state.version = 4;
     state.model.params = { ...base.model.params };
     state.model.baseline = { ...base.model.baseline };
     state.model.candidates = {};
@@ -66,7 +66,14 @@ export function normaliseState(value) {
     state.model.pdca.rolling = { ...base.model.pdca.rolling };
     state.model.pdca.byVenue = {};
     state.model.pdca.byCondition = {};
-    state.model.pdca.lastDecision = "精度改善v3へ移行（試走の過信を抑制・6〜8車対応）";
+    state.model.pdca.cycles = 0;
+    state.model.pdca.accepted = 0;
+    state.model.pdca.rejected = 0;
+    state.model.pdca.lastCycleAt = null;
+    state.model.pdca.lastDecision = "精度改善v4へ移行（確率平滑化・3モデル平均・締切後除外）";
+    state.model.pdca.changeHistory = [...state.model.pdca.changeHistory, {
+      at: new Date().toISOString(), type: "model-v4", note: "不確実性を確率へ反映し、近傍3モデルを平均。締切後の予想を検証対象外に変更"
+    }].slice(-30);
   }
   return state;
 }
