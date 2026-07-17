@@ -5,7 +5,7 @@
 オートレースの公開出走表・試走・確定結果を取得し、3連単の確率を計算するWebアプリです。
 画面を閉じている間もDeno DeployのCronが15分ごとに収集・結果照合・PDCAを実行します。
 
-- 公開URL: https://autorace-yosou-cloud.hakutsu810-web.deno.net/
+- 公開URL: https://autorace-yosou-cloud.autorace-lab.deno.net/
 - GitHub: `hakutsu810-web/autorace-yosou-cloud`
 - Deno Entrypoint: `deno/main.mjs`
 - 主なデータ元: WINTICKETの公開ページ
