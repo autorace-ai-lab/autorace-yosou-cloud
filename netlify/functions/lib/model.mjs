@@ -14,8 +14,16 @@ const BASE = {
   recentW: 0.003, topLead: 0.008, fW: 0.003,
   defHensa: 0.09, defDist: 3100, defT: 3.45, beta: 32,
   betaCond: { good: 1, mudd: 0.89, wet: 0.74 },
-  handiCond: { good: 1, mudd: 1.04, wet: 1.10 }, wetNoise: 0.05
+  handiCond: { good: 1, mudd: 1.04, wet: 1.10 },
+  eps: { good: 0.03, mudd: 0.06, wet: 0.10 }, epsMissing: 0.08, epsCap: 0.22
 };
+
+// 単一の最適値に寄せすぎず、近傍3モデルの平均で確率を安定させる。
+const ENSEMBLE = [
+  { dk: -0.08, db: -0.10 },
+  { dk: 0, db: 0 },
+  { dk: 0.08, db: 0.10 }
+];
 
 const mean = a => a.reduce((s, x) => s + x, 0) / Math.max(1, a.length);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -71,21 +79,32 @@ export function coreScores(cars, venueId, cond = "good", dist, params = {}) {
   const lead = BASE.topLead * (cond === "wet" ? 0.4 : 1) / Math.max(1, fronts.length);
   fronts.forEach(i => { eff[i] += lead; });
   const beta = BASE.beta * p.betaScale * BASE.betaCond[cond];
+  const missingRatio = cars.filter(c => c.avgRace == null || c.avgShiso == null).length / Math.max(1, n);
+  const epsilon = Math.min(BASE.epsCap, (BASE.eps[cond] ?? BASE.eps.good) + BASE.epsMissing * missingRatio);
   const scoreFor = weight => {
     const adjusted = eff.map((x, i) => x + hp[i] * (weight - 1));
     const m = mean(adjusted);
-    let scores = adjusted.map(x => Math.exp(-beta * (x - m)));
-    if (cond === "wet") {
-      const mx = Math.max(...scores);
-      scores = scores.map(v => v + BASE.wetNoise * mx);
-    }
+    const scores = adjusted.map(x => Math.exp(-beta * (x - m)));
     const total = scores.reduce((a, b) => a + b, 0);
-    return scores.map(v => v / total * n);
+    return scores.map(v => (1 - epsilon) * (v / total * n) + epsilon);
   };
   const s1 = scoreFor(1), sP = scoreFor(p.placeHandi);
   const S1 = s1.reduce((a, b) => a + b, 0), SP = sP.reduce((a, b) => a + b, 0);
   const idx = Object.fromEntries(cars.map((c, i) => [c.num, i]));
-  return { cars, idx, s1, sP, S1, SP, p1: s1.map(v => v / S1), eff, hp, beta, distance };
+  return { cars, idx, s1, sP, S1, SP, p1: s1.map(v => v / S1), eff, hp, beta, distance, epsilon };
+}
+
+export function ensembleCores(cars, venueId, cond = "good", dist, params = {}) {
+  const center = { k: 0.40, betaScale: 1, placeHandi: 1, ...params };
+  return ENSEMBLE.map(o => coreScores(cars, venueId, cond, dist, {
+    ...center,
+    k: clamp(center.k + o.dk, 0.20, 0.55),
+    betaScale: Math.max(0.30, center.betaScale + o.db)
+  }));
+}
+
+export function ensembleTrifectaProbability(cores, a, b, c) {
+  return mean(cores.map(core => trifectaProbability(core, a, b, c)));
 }
 
 export function trifectaProbability(core, a, b, c) {
@@ -97,16 +116,17 @@ export function trifectaProbability(core, a, b, c) {
 }
 
 export function predictRace(card, params) {
-  const core = coreScores(card.cars, card.venue, card.cond, card.dist, params);
+  const cores = ensembleCores(card.cars, card.venue, card.cond, card.dist, params);
   const tri = [];
   for (const a of card.cars) for (const b of card.cars) for (const c of card.cars) {
     if (a.num === b.num || a.num === c.num || b.num === c.num) continue;
-    tri.push({ a: a.num, b: b.num, c: c.num, p: trifectaProbability(core, a.num, b.num, c.num) });
+    tri.push({ a: a.num, b: b.num, c: c.num, p: ensembleTrifectaProbability(cores, a.num, b.num, c.num) });
   }
   const sum = tri.reduce((s, x) => s + x.p, 0);
   tri.forEach(x => { x.p /= sum || 1; });
   tri.sort((a, b) => b.p - a.p);
-  return { p1: core.p1, tri, probabilitySum: tri.reduce((s, x) => s + x.p, 0) };
+  const p1 = card.cars.map((_, i) => mean(cores.map(core => core.p1[i])));
+  return { p1, tri, probabilitySum: tri.reduce((s, x) => s + x.p, 0) };
 }
 
 export function candidateGrid() {
@@ -134,8 +154,8 @@ export function learnFromResult(model, card, result) {
     const stat = model.candidates[id] ||= { params, trainN: 0, trainLL: 0, valN: 0, valLL: 0, trainRecent: [], valRecent: [] };
     stat.trainRecent = Array.isArray(stat.trainRecent) ? stat.trainRecent : [];
     stat.valRecent = Array.isArray(stat.valRecent) ? stat.valRecent : [];
-    const core = coreScores(card.cars, card.venue, card.cond, card.dist, params);
-    const prob = clamp(trifectaProbability(core, actual[0], actual[1], actual[2]), 1e-9, 1);
+    const cores = ensembleCores(card.cars, card.venue, card.cond, card.dist, params);
+    const prob = clamp(ensembleTrifectaProbability(cores, actual[0], actual[1], actual[2]), 1e-9, 1);
     const loss = -Math.log(prob);
     if (isValidation) { stat.valN++; stat.valLL += loss; pushRecent(stat.valRecent, loss); }
     else { stat.trainN++; stat.trainLL += loss; pushRecent(stat.trainRecent, loss); }
