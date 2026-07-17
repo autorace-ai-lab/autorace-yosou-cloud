@@ -10,7 +10,7 @@ GitHubリポジトリ `hakutsu810-web/autorace-yosou-cloud` をClaude Codeで開
 `CLAUDE-CODE-PROMPT.txt`を貼り付け、最後に変更内容を書いてください。
 
 本番URL
-https://autorace-yosou-cloud.hakutsu810-web.deno.net/
+https://autorace-yosou-cloud.autorace-lab.deno.net/
 
 注意
 APIキー、パスワード、Cookieなどの秘密情報はこの一式に含めていません。
