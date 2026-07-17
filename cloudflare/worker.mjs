@@ -14,8 +14,26 @@ function publicPrediction(card, params) {
   return { params: { ...params }, p1: p.p1, probabilitySum: p.probabilitySum, top: p.tri.slice(0, 30), createdAt: new Date().toISOString() };
 }
 
+function isBeforeDeadline(card, at = Date.now()) {
+  const deadline = Date.parse(card?.closeAt || "");
+  return !Number.isFinite(deadline) || (Number.isFinite(at) && at < deadline);
+}
+
+function hasPreDeadlineSnapshot(card) {
+  if (!card) return false;
+  if (card.preDeadline === true) return true;
+  if (card.preDeadline === false) return false;
+  const at = Date.parse(card.prediction?.createdAt || card.fetchedAt || "");
+  return isBeforeDeadline(card, at);
+}
+
 function trainOnce(state, card, result, mode) {
   if (!card || !result || card.trained || card.cars?.length < 6) return false;
+  if (mode === "live-snapshot" && card.preDeadline === false) {
+    card.result = result;
+    card.trainingExcluded = "post-deadline-snapshot";
+    return false;
+  }
   const score = learnFromResult(state.model, card, result);
   if (!score) return false;
   card.result = result; card.trained = true; card.trainedAt = new Date().toISOString();
@@ -32,6 +50,8 @@ async function collectCurrent(state, maxRaces = 32) {
     const card = parseCard(await fetchText(raceUrl(race)), race);
     if (card.cars.length < 6) return null;
     const old = state.races[card.key];
+    if (!isBeforeDeadline(card) && hasPreDeadlineSnapshot(old)) return old;
+    card.preDeadline = isBeforeDeadline(card);
     card.prediction = publicPrediction(card, state.model.params);
     card.result = old?.result || null; card.trained = !!old?.trained; card.trainedAt = old?.trainedAt || null;
     state.races[card.key] = card; return card;
@@ -41,13 +61,13 @@ async function collectCurrent(state, maxRaces = 32) {
 
 async function collectPendingResults(state, maxResults = 14) {
   const now = Date.now();
-  const pending = Object.values(state.races).filter(r => !r.trained && r.cars?.length >= 6 && (!r.closeAt || Date.parse(r.closeAt) < now - 4 * 60_000))
+  const pending = Object.values(state.races).filter(r => !r.result && r.cars?.length >= 6 && (!r.closeAt || Date.parse(r.closeAt) < now - 4 * 60_000))
     .sort((a, b) => Date.parse(b.closeAt || 0) - Date.parse(a.closeAt || 0)).slice(0, maxResults);
   await mapLimit(pending, 4, async card => {
     const result = parseResult(await fetchText(resultUrl(card)), card);
     if (result) trainOnce(state, card, result, "live-snapshot");
   });
-  state.collector.pendingResults = Object.values(state.races).filter(r => !r.trained && r.cars?.length >= 6).length;
+  state.collector.pendingResults = Object.values(state.races).filter(r => !r.result && r.cars?.length >= 6).length;
 }
 
 async function discoverBackfill(state) {
@@ -65,13 +85,14 @@ async function runBackfill(state) {
     const [cardHtml, resultHtml] = await Promise.all([fetchText(raceUrl(race), 8000), fetchText(resultUrl(race), 8000)]);
     const card = parseCard(cardHtml, race), result = parseResult(resultHtml, race);
     if (card.cars.length < 6 || !result) return;
+    card.preDeadline = "historical-backfill";
     card.prediction = publicPrediction(card, state.model.params); state.races[card.key] = card;
     trainOnce(state, card, result, "historical-backfill");
   });
 }
 
 function refreshOpenPredictions(state) {
-  for (const card of Object.values(state.races)) if (!card.result && card.cars?.length >= 6) card.prediction = publicPrediction(card, state.model.params);
+  for (const card of Object.values(state.races)) if (!card.result && card.cars?.length >= 6 && isBeforeDeadline(card)) card.prediction = publicPrediction(card, state.model.params);
 }
 
 function prune(state) {
@@ -100,7 +121,7 @@ export async function updateState(state, mode = "scheduled") {
 }
 
 export function statePayload(state) {
-  const races = Object.values(state.races).map(r => ({ key:r.key,slug:r.slug,venue:r.venue,cup:r.cup,day:r.day,r:r.r,close:r.close,closeAt:r.closeAt,cond:r.cond,dist:r.dist,cars:r.cars,prediction:r.prediction,result:r.result,trained:!!r.trained,fetchedAt:r.fetchedAt }))
+  const races = Object.values(state.races).map(r => ({ key:r.key,slug:r.slug,venue:r.venue,cup:r.cup,day:r.day,r:r.r,close:r.close,closeAt:r.closeAt,cond:r.cond,dist:r.dist,cars:r.cars,prediction:r.prediction,result:r.result,trained:!!r.trained,trainingExcluded:r.trainingExcluded||null,preDeadline:r.preDeadline,fetchedAt:r.fetchedAt }))
     .sort((a,b)=>String(a.closeAt||"").localeCompare(String(b.closeAt||"")));
   return { ok:true, model:state.model, collector:state.collector, races, journal:state.journal.slice(-100) };
 }
