@@ -1,20 +1,24 @@
-オートレース3連単予想ラボ — Netlifyクラウド学習版
+オートレース3連単予想ラボ — Deno/Netlifyクラウド学習版
 =====================================================
 
 これは WINTICKET の公開出走表・結果を使い、画面を閉じている間も
-15分ごとに情報収集と検証学習を行う Netlify 用プロジェクトです。
+15分ごとに情報収集と検証学習を行うプロジェクトです。
+現在の本番環境はDeno Deployです。
 
 主な機能
 --------
 ・本日の開催と出走表を WINTICKET から取得
 ・試走タイム、偏差、ST、ハンデ、級別、審査点、近況成績を使用
-・Plackett-Luce で8車の3連単336通りを列挙（合計確率=100%）
+・Plackett-Luce で6車120・7車210・8車336通りを列挙（合計確率=100%）
+・近傍3モデルの平均と情報不足に応じた確率平滑化で、単一設定の過信を抑制
 ・レース前スナップショットだけを保存し、確定結果と照合
+・締切後に生成された予想を学習・検証から自動除外
 ・結果確定後にモデル順位、確率、配当を学習履歴へ保存
 ・5年以内の過去レースを新しい順に少しずつ追加学習
-・20%を固定の検証データとして分離し、検証損失が1%以上改善した
+・20%を固定の検証データとして分離し、検証損失が改善した
   パラメータだけを採用（過学習対策）
 ・Netlify Blobs にモデル、レース、PDCA履歴を永続保存
+・ブラウザ履歴はJSON・JSONL・CSVで取り込み可能
 
 定期実行
 --------
@@ -28,12 +32,8 @@ Netlifyの定期Functionは本番公開後に動きます。
 
 公開方法
 --------
-1. このフォルダーをGitHubリポジトリへ登録
-2. Netlifyで「Add new project」→「Import an existing project」
-3. 対象リポジトリを選択
-4. Publish directory は「.」、Functions directory は
-   netlify/functions（netlify.tomlから自動認識）
-5. Deployを実行
+現在の公開方法は DENO-README.md を参照してください。
+Netlifyへ公開する場合は netlify.toml と netlify/functions を使用します。
 
 公開後の確認
 ------------
@@ -57,6 +57,9 @@ Netlifyの定期Functionは本番公開後に動きます。
 ファイル
 --------
 index.html                         予想画面
+CLAUDE.md                          Claude Code向け仕様・変更ルール
+CLAUDE-CODE-PROMPT.txt             Claude Codeへ貼り付ける依頼文
+START-HERE.txt                     引き継ぎ開始手順
 netlify.toml                       公開・15分間隔の設定
 package.json                       Netlify Blobs / HTML解析の依存関係
 netlify/functions/collect-and-train.mjs  収集・結果照合・学習
@@ -64,4 +67,3 @@ netlify/functions/state.mjs        画面へ最新状態を返すAPI
 netlify/functions/lib/model.mjs    確率計算・検証学習
 netlify/functions/lib/source.mjs   WINTICKET取得・解析
 netlify/functions/lib/store.mjs    Netlify Blobs永続化
-
