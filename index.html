@@ -532,11 +532,11 @@ textarea.inp{min-height:104px;resize:vertical;font-family:var(--mono);font-size:
       <div class="ph"><div><div class="ey">履歴</div><h2 id="logCount">0件</h2></div>
         <div class="seg"><button class="btn mini grey" id="expJson">JSON書出</button><button class="btn mini grey" id="expCsv">CSV書出</button></div></div>
       <div class="row" style="margin-bottom:10px">
-        <button class="btn ghost mini" id="impBtn">JSON読込</button>
+        <button class="btn ghost mini" id="impBtn">履歴読込</button>
         <button class="btn ghost mini" id="clearLog">履歴を全消去</button>
       </div>
-      <input type="file" id="impFile" accept=".json" style="display:none">
-      <div class="hint" style="margin-bottom:10px">履歴はこの端末のブラウザに保存されます（他端末とは共有されません）。<b>JSON書出でバックアップ</b>を取ってください。実際に出走した6〜8車の生データごと保存し、後からパラメータを変えて再採点できます。</div>
+      <input type="file" id="impFile" accept=".json,.jsonl,.csv" style="display:none">
+      <div class="hint" style="margin-bottom:10px">履歴はこの端末のブラウザに保存されます（他端末とは共有されません）。<b>JSON書出でバックアップ</b>を取ってください。JSON・JSONL・この画面のCSVを読み込めます。締切後に作った予想は学習・検証から除外します。</div>
       <div style="overflow-x:auto"><table class="dtbl" id="logTbl"></table></div>
     </div>
 
@@ -622,12 +622,14 @@ const P = {
   betaCond:{good:1.00, mudd:0.89, wet:0.74},  // 低いほど荒れる（湿＜良）
   handiCond:{good:1.00, mudd:1.04, wet:1.10},
   placeHandi:1.0,            // 2・3着でのハンデ重み(1.0=純Plackett-Luce)。>1で前残り寄り
-  wetNoise:0.05
+  eps:{good:0.03,mudd:0.06,wet:0.10}, epsMissing:0.08, epsCap:0.22
 };
+const ENSEMBLE=[{dk:-0.08,db:-0.10},{dk:0,db:0},{dk:0.08,db:0.10}];
 let RACE_DIST=null;
 
 let COND='good';
 let MODEL=null;
+let PRED_AT=null;
 let RACES=[];
 
 /* ---------- helpers ---------- */
@@ -701,18 +703,19 @@ function coreScores(cars, ven, cond, dist){
 
   /* 絶対尺度で確率化（sdで割らない＝力差の情報を捨てない） */
   const beta=P.beta*(P.betaScale||1)*(P.betaCond[cond]||1);
+  const missingRatio=cars.filter(c=>c.avgRace==null||c.avgShiso==null).length/Math.max(1,n);
+  const epsilon=Math.min(P.epsCap,(P.eps[cond]??P.eps.good)+P.epsMissing*missingRatio);
   const scoreFor=(w)=>{
     const e=eff.map((x,i)=>x + hp[i]*(w-1));
     const m=mean(e);
-    let s=e.map(x=>Math.exp(-beta*(x-m)));
-    if(cond==='wet'){const mx=Math.max(...s); s=s.map(v=>v+P.wetNoise*mx);}
+    const s=e.map(x=>Math.exp(-beta*(x-m)));
     const tot=s.reduce((a,b)=>a+b,0);
-    return s.map(v=>v/tot*n);
+    return s.map(v=>(1-epsilon)*(v/tot*n)+epsilon);
   };
   const s1=scoreFor(1), sP=scoreFor(P.placeHandi||1);
   const S1=s1.reduce((a,b)=>a+b,0), SP=sP.reduce((a,b)=>a+b,0);
   const idx={}; cars.forEach((c,i)=>{idx[c.num]=i;});
-  return {n,cars,eff,hp,s1,sP,S1,SP,idx,front:fIdx[0],perM,beta,D,
+  return {n,cars,eff,hp,s1,sP,S1,SP,idx,front:fIdx[0],perM,beta,D,epsilon,
           p1:s1.map(v=>v/S1)};
 }
 /* 指定の3連単の確率だけを O(1) で求める（最適化ループ用） */
@@ -724,20 +727,31 @@ function triProb(C,a,b,c){
   return (C.s1[ia]/C.S1)*(C.sP[ib]/d1)*(C.sP[ic]/d2);
 }
 
+function ensembleScores(cars,ven,cond,dist){
+  return ENSEMBLE.map(o=>withParams({
+    k:clamp(P.k+o.dk,0.20,0.55),
+    betaScale:Math.max(0.30,P.betaScale+o.db)
+  },()=>coreScores(cars,ven,cond,dist)));
+}
+function ensembleTriProb(cores,a,b,c){return mean(cores.map(C=>triProb(C,a,b,c)||0));}
+
 function buildModel(cars, ven, cond, dist){
-  const C=coreScores(cars,ven,cond,dist);
-  const {n,eff,hp,s1,sP,S1,SP,p1,perM,beta,D,front}=C;
+  const cores=ensembleScores(cars,ven,cond,dist), C=cores[1];
+  const {n,eff,hp,s1,sP,S1,SP,perM,beta,D,front}=C;
+  const p1=cars.map((_,i)=>mean(cores.map(x=>x.p1[i])));
   /* 位置別スコアのPlackett-Luce。合計が厳密に1になることは検算済み */
   const tri=[];
   for(let a=0;a<n;a++)for(let b=0;b<n;b++){ if(b===a)continue;
     for(let c=0;c<n;c++){ if(c===a||c===b)continue;
-      const pa=s1[a]/S1, pb=sP[b]/(SP-sP[a]), pc=sP[c]/(SP-sP[a]-sP[b]);
-      tri.push({a:cars[a].num,b:cars[b].num,c:cars[c].num,ia:a,ib:b,ic:c,p:pa*pb*pc});
+      tri.push({a:cars[a].num,b:cars[b].num,c:cars[c].num,ia:a,ib:b,ic:c,
+        p:ensembleTriProb(cores,cars[a].num,cars[b].num,cars[c].num)});
     }}
+  const triSum=tri.reduce((s,x)=>s+x.p,0); tri.forEach(x=>x.p/=triSum||1);
   tri.sort((x,y)=>y.p-x.p);
   const exa=[];
   for(let a=0;a<n;a++)for(let b=0;b<n;b++){ if(b===a)continue;
-    exa.push({a:cars[a].num,b:cars[b].num,p:(s1[a]/S1)*(sP[b]/(SP-sP[a]))});}
+    exa.push({a:cars[a].num,b:cars[b].num,p:mean(cores.map(x=>(x.s1[a]/x.S1)*(x.sP[b]/(x.SP-x.sP[a]))))});}
+  const exaSum=exa.reduce((s,x)=>s+x.p,0); exa.forEach(x=>x.p/=exaSum||1);
   exa.sort((x,y)=>y.p-x.p);
   const trioMap={};
   tri.forEach(t=>{const k=[t.a,t.b,t.c].sort((x,y)=>x-y).join('-'); trioMap[k]=(trioMap[k]||0)+t.p;});
@@ -1300,7 +1314,8 @@ function logResult(actual){
     snap: {top:[MODEL.tri[0].a,MODEL.tri[0].b,MODEL.tri[0].c], p:MODEL.tri[0].p,
            nCars:MODEL.cars.length, triCount:MODEL.tri.length,
            params:{k:P.k, betaScale:P.betaScale, placeHandi:P.placeHandi, stW:P.stW, formW:P.formW}},
-    actual: actual
+    actual: actual,
+    pre: predictionBeforeDeadline()
   };
   const i=LOG.findIndex(x=>x.id===e.id);
   if(i>=0)LOG[i]=e; else LOG.push(e);
@@ -1308,6 +1323,18 @@ function logResult(actual){
   return e;
 }
 function todayStr(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+function predictionBeforeDeadline(){
+  if(!PRED_AT)return null;
+  const cloudDeadline=LAST?.closeAt?Date.parse(LAST.closeAt):NaN;
+  if(Number.isFinite(cloudDeadline))return PRED_AT<cloudDeadline;
+  const hm=$('#closeAt').value;
+  if(!hm)return null;
+  const [h,m]=hm.split(':').map(Number);
+  if(!Number.isFinite(h)||!Number.isFinite(m))return null;
+  const deadline=new Date(PRED_AT); deadline.setHours(h,m,0,0);
+  if(deadline.getTime()<PRED_AT-12*3600000)deadline.setDate(deadline.getDate()+1);
+  return PRED_AT<deadline.getTime();
+}
 
 /* パラメータを一時差し替えて実行 */
 function withParams(pr,fn){
@@ -1329,6 +1356,7 @@ function scoreLog(params,entries){
              byCond:{}, byVenue:{}};
     let llSum=0;
     for(const e of SRC){
+      if(e.pre===false)continue;
       if(!e.actual||!e.cars||e.cars.length<6)continue;
       const ven=VENUES.find(v=>v.id===e.venue); if(!ven)continue;
       let M; try{ M=buildModel(e.cars.map(c=>({...c})),ven,e.cond,e.dist); }catch(err){ continue; }
@@ -1376,10 +1404,11 @@ function scoreFast(params,entries){
   return withParams(params||{},()=>{
     let ll=0,n=0;
     for(const e of SRC){
+      if(e.pre===false)continue;
       if(!e.actual||!e.cars||e.cars.length<6)continue;
       const ven=VENUES.find(v=>v.id===e.venue); if(!ven)continue;
-      let C; try{ C=coreScores(e.cars,ven,e.cond,e.dist); }catch(err){ continue; }
-      const p=triProb(C,e.actual.a,e.actual.b,e.actual.c);
+      let cores; try{ cores=ensembleScores(e.cars,ven,e.cond,e.dist); }catch(err){ continue; }
+      const p=ensembleTriProb(cores,e.actual.a,e.actual.b,e.actual.c);
       if(p==null||!(p>0))continue;
       ll+=-Math.log(Math.max(p,1e-12)); n++;
     }
@@ -1398,7 +1427,7 @@ function optimize(){
   const ls=[0.9,1.0,1.1,1.3];
   const grid=[];
   for(const k of ks)for(const b of bs)for(const l of ls)grid.push({k,betaScale:b,placeHandi:l});
-  const done=LOG.filter(e=>e.actual&&e.cars&&e.cars.length>=6);
+  const done=LOG.filter(e=>e.pre!==false&&e.actual&&e.cars&&e.cars.length>=6);
   if(!done.length)return {all:[],best:null,cv:null,n:0,grid:grid.length};
 
   // 全データでの最良（in-sample／参考値）
@@ -1429,6 +1458,7 @@ function predict(){
   if(!validEntries(cars)){toast('試走タイムを最低6車ぶん入れてください');return;}
   const ven=VENUES.find(v=>v.id===$('#venue').value);
   MODEL=buildModel(cars,ven,COND,RACE_DIST);
+  PRED_AT=Date.now();
   const allBtn=document.querySelector('#topN button[data-n="all"]');
   if(allBtn)allBtn.textContent=`全${MODEL.tri.length}`;
   $('#resultZone').style.display='block';
@@ -1839,6 +1869,7 @@ function scoreSnapshots(){
            plans:{hon:{hit:0,bet:0,pay:0},bal:{hit:0,bet:0,pay:0},ana:{hit:0,bet:0,pay:0}},byCond:{},byVenue:{}};
   let ll=0;
   for(const e of LOG){
+    if(e.pre===false)continue;
     if(!e.actual||!e.snap)continue;
     const hit=e.snap.top[0]===e.actual.a&&e.snap.top[1]===e.actual.b&&e.snap.top[2]===e.actual.c;
     if(hit)R.top1++;
@@ -1985,14 +2016,61 @@ function expCsv(){
   }
   dl(`autorace-pdca-${todayStr()}.csv`,'\ufeff'+lines.join('\n'),'text/csv'); toast('CSVを書き出しました');
 }
-function impJson(file){
+function parseCsvLine(line){
+  const out=[];let s='',q=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"'){if(q&&line[i+1]==='"'){s+='"';i++;}else q=!q;}
+    else if(ch===','&&!q){out.push(s);s='';}else s+=ch;
+  }
+  out.push(s);return out;
+}
+function normaliseImported(e){
+  if(!e||typeof e!=='object')return null;
+  const ven=VENUES.find(v=>v.id===e.venue||v.name===e.venue||v.name===e.venueName);
+  const venue=ven?.id||e.venue;
+  const r=Number(e.r??e.race);
+  const date=String(e.date||'').slice(0,10);
+  if(!venue||!date||!Number.isFinite(r))return null;
+  const n=x=>x===''||x==null?null:Number(x);
+  const actual=e.actual?{a:n(e.actual.a),b:n(e.actual.b),c:n(e.actual.c),pay:n(e.actual.pay)||0}:null;
+  if(actual&&(!actual.a||!actual.b||!actual.c))return null;
+  return {...e,id:e.id||`${venue}-${date}-${r}`,ts:Number(e.ts)||Date.parse(date)||Date.now(),date,venue,
+    venueName:ven?.name||e.venueName||e.venue,cars:Array.isArray(e.cars)?e.cars:[],r,
+    cond:e.cond||'good',dist:n(e.dist),actual,pre:e.pre??'import'};
+}
+function csvToHistory(text){
+  const lines=text.split(/\r?\n/).filter(x=>x.trim());if(lines.length<2)return [];
+  const head=parseCsvLine(lines[0]).map(x=>x.trim());
+  return lines.slice(1).map(line=>{
+    const v=parseCsvLine(line),o={};head.forEach((k,i)=>o[k]=v[i]??'');
+    const ven=VENUES.find(x=>x.id===o.venue||x.name===o.venue);
+    const pred=[o.pred1,o.pred2,o.pred3].map(Number),act=[o.act1,o.act2,o.act3].map(Number);
+    const nCars=Math.max(6,...pred.filter(Number.isFinite),...act.filter(Number.isFinite));
+    return normaliseImported({date:o.date,venue:ven?.id||o.venue,venueName:ven?.name||o.venue,r:o.race,
+      cond:o.cond,dist:o.dist,cars:[],pre:'import',
+      snap:pred.every(x=>x>0)?{top:pred,p:Number(o.predP)||1/triCount(nCars),nCars,triCount:triCount(nCars)}:null,
+      actual:act.every(x=>x>0)?{a:act[0],b:act[1],c:act[2],pay:Number(o.pay)||0}:null});
+  }).filter(Boolean);
+}
+function parseHistory(text,fileName){
+  const src=String(text).replace(/^\uFEFF/,'').trim();if(!src)return [];
+  if(/\.csv$/i.test(fileName)||/^date,venue,race,/i.test(src))return csvToHistory(src);
+  try{
+    const json=JSON.parse(src),arr=Array.isArray(json)?json:(json.history||json.log||[]);
+    return arr.map(normaliseImported).filter(Boolean);
+  }catch(_){
+    return src.split(/\r?\n/).filter(x=>x.trim()).map(line=>{try{return normaliseImported(JSON.parse(line));}catch(_){return null;}}).filter(Boolean);
+  }
+}
+function impHistory(file){
   const fr=new FileReader();
   fr.onload=()=>{
     try{
-      const arr=JSON.parse(fr.result);
-      if(!Array.isArray(arr))throw new Error('形式が違います');
+      const arr=parseHistory(fr.result,file.name);
+      if(!arr.length)throw new Error('有効な履歴が見つかりません');
       let add=0;
-      for(const e of arr){ if(!e||!e.id)continue;
+      for(const e of arr){
         const i=LOG.findIndex(x=>x.id===e.id);
         if(i>=0)LOG[i]=e; else {LOG.push(e);add++;} }
       saveLog(); renderPDCA();
@@ -2020,6 +2098,7 @@ function renderParams(){
     ['　走路別 β倍率','良'+P.betaCond.good+' / 斑'+P.betaCond.mudd+' / 湿'+P.betaCond.wet+'（低いほど荒れる）'],
     ['2・3着のハンデ重み λ','×'+P.placeHandi+'（1.0=純Plackett-Luce / >1で前残り寄り）'],
     ['走路のハンデ増幅','良'+P.handiCond.good+' / 斑'+P.handiCond.mudd+' / 湿'+P.handiCond.wet],
+    ['確率の安定化','近傍3モデル平均 / 不確実性平滑化 良'+P.eps.good+'・斑'+P.eps.mudd+'・湿'+P.eps.wet],
   ];
   $('#paramList').innerHTML=rows.map(r=>`<div class="kv"><span>${r[0]}</span><b>${r[1]}</b></div>`).join('');
 }
@@ -2076,7 +2155,7 @@ function init(){
   $('#expJson').addEventListener('click',expJson);
   $('#expCsv').addEventListener('click',expCsv);
   $('#impBtn').addEventListener('click',()=>$('#impFile').click());
-  $('#impFile').addEventListener('change',e=>{if(e.target.files[0])impJson(e.target.files[0]);e.target.value='';});
+  $('#impFile').addEventListener('change',e=>{if(e.target.files[0])impHistory(e.target.files[0]);e.target.value='';});
   $('#clearLog').addEventListener('click',()=>{
     if(!LOG.length){toast('履歴がありません');return;}
     if(confirm(`履歴 ${LOG.length}件をすべて消去します。よろしいですか？\n（先にJSON書出でバックアップを推奨）`)){
