@@ -1053,6 +1053,9 @@ async function loadToday(){
 }
 let WT_RACES=[]; let LAST=null; let AUTO=null;
 let CLOUD=null; let CLOUD_RACES={};
+const STATIC_STATE_URL=new URL('data/state.json',location.href).href;
+const STATIC_HOST=/\.github\.io$|\.pages\.dev$|\.deno\.net$/.test(location.hostname);
+let CLOUD_SOURCE='cloud';
 const cloudKey=d=>d.key||`${d.slug}|${d.cup}|${Number(d.day)}|${Number(d.r)}`;
 function renderCloudStatus(ok,msg){
   const dot=$('#cloudDot'); if(!dot)return;
@@ -1099,12 +1102,21 @@ function renderAllResults(){
   }).join('');
   el.innerHTML=`<div class="today-summary"><b>本日 ${all.length}R</b><span>確定 ${done.length}R</span><span>結果待ち ${all.length-done.length}R</span></div><div class="today-compare">${rows}</div>`;
 }
-async function loadCloudState(){
-  if(location.protocol==='file:'){renderCloudStatus(false,'このファイルをNetlifyへ公開すると有効になります。');return false;}
+async function loadCloudState(quiet=false){
+  if(location.protocol==='file:'){renderCloudStatus(false,'公開サイトで有効になります。');return false;}
   try{
-    const r=await fetch('/.netlify/functions/state',{cache:'no-store'});
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    const urls=STATIC_HOST?[STATIC_STATE_URL]:['/.netlify/functions/state',STATIC_STATE_URL];
+    let r=null,lastError=null,used='';
+    for(const url of urls){
+      try{
+        const candidate=await fetch(`${url}${url.includes('?')?'&':'?'}v=${Date.now()}`,{cache:'no-store'});
+        if(candidate.ok){r=candidate;used=url;break;}
+        lastError=new Error(`HTTP ${candidate.status}`);
+      }catch(error){lastError=error;}
+    }
+    if(!r)throw lastError||new Error('最新データを取得できません');
     const data=await r.json(); if(!data.ok)throw new Error(data.error||'state error');
+    CLOUD_SOURCE=used===STATIC_STATE_URL?'static':'cloud';
     CLOUD=data; CLOUD_RACES={};
     (data.races||[]).forEach(x=>{CLOUD_RACES[x.key]=x;});
     if(data.model?.params){
@@ -1121,10 +1133,23 @@ async function loadCloudState(){
       result:x.result,prediction:x.prediction,cars:x.cars,cond:x.cond
     }));
     if(list.length){WT_RACES=list.sort((a,b)=>String(a.closeAt||'').localeCompare(String(b.closeAt||'')));renderWTList();}
-    renderCloudStatus(true); renderAllResults(); return true;
-  }catch(e){renderCloudStatus(false,`接続できません: ${e.message}`);return false;}
+    renderCloudStatus(true);
+    if(CLOUD_SOURCE==='static'){
+      const at=data.collector?.lastSuccess?new Date(data.collector.lastSuccess).toLocaleString('ja-JP'):'初回更新待ち';
+      $('#cloudTitle').textContent=`15分ごとに自動更新　学習 ${data.model?.trained||0}R`;
+      $('#cloudMeta').textContent=`最終データ ${at}／画面は60秒ごとに自動再読込`;
+    }
+    renderAllResults();
+    if(!quiet)stampUpdated();
+    return true;
+  }catch(e){if(!quiet)renderCloudStatus(false,`接続できません: ${e.message}`);return false;}
 }
 async function runCloudCollection(mode='current'){
+  if(STATIC_HOST||CLOUD_SOURCE==='static'){
+    const ok=await loadCloudState();
+    if(!ok)throw new Error('自動更新データを読み込めません');
+    return {ok:true,mode,static:true,collector:CLOUD?.collector,model:CLOUD?.model};
+  }
   const r=await fetch(`/.netlify/functions/collect-and-train?mode=${encodeURIComponent(mode)}`,{cache:'no-store'});
   if(!r.ok)throw new Error(`HTTP ${r.status}`);
   const data=await r.json();
@@ -1136,7 +1161,7 @@ async function updateTodayNow(){
   if(location.protocol==='file:'){await loadToday();return;}
   const data=await runCloudCollection('current');
   const n=todayCloudRaces().filter(x=>x.cars?.length>=6).length;
-  $('#batchStatus').textContent=`更新完了：本日の出走表 ${n}R`;
+  $('#batchStatus').textContent=`最新データ読込：本日の出走表 ${n}R${data.static?'（15分ごとに自動収集）':''}`;
   switchView('list'); toast(`本日の出走表 ${n}Rを更新しました`);
   return data;
 }
@@ -1152,7 +1177,7 @@ async function syncCloudNow(){
   if(location.protocol==='file:'){toast('Netlify公開版で利用できます');return;}
   const b=$('#cloudSyncBtn'), old=b.textContent;b.disabled=true;b.textContent='同期中…';
   try{
-    await runCloudCollection('current');toast('学習データも更新しました');
+    const data=await runCloudCollection('current');toast(data.static?'最新の学習データを読み込みました':'学習データも更新しました');
   }catch(e){renderCloudStatus(false,`同期失敗: ${e.message}`);toast('同期に失敗しました');}
   finally{b.disabled=false;b.textContent=old;}
 }
@@ -1193,7 +1218,7 @@ async function loadRace(d,quiet){
   if(cloudCard?.cars?.length>=6){
     cars=cloudCard.cars;
     meta={close:cloudCard.close,cond:cloudCard.cond==='wet'?'湿走路':cloudCard.cond==='mudd'?'斑走路':'良走路',dist:cloudCard.dist,laps:cloudCard.laps};
-    flog('✓ Netlifyが保存した最新の出走表を使用','ok');
+    flog('✓ 自動更新で保存した最新の出走表を使用','ok');
   }else{
     const html=await proxyGet(url);
     if(!html){flog('✕ 取得に失敗しました。ブックマークレットをご利用ください。','ng');return;}
@@ -1210,7 +1235,7 @@ async function loadRace(d,quiet){
   if(meta.cond){COND=condToKey(meta.cond); syncCondUI(); flog(`走路 ${meta.cond} を反映`,'dm');}
   RACE_DIST=meta.dist||null;
   if(meta.dist)flog(`距離 ${meta.dist.toLocaleString()}m (${meta.laps}周) を反映 → ハンデ換算 10m≒${(3.45/meta.dist*10).toFixed(4)}秒`,'dm');
-  $('#routeTag').textContent=cloudCard?'WINTICKET / Netlify保存':'WINTICKET';
+  $('#routeTag').textContent=cloudCard?'WINTICKET / 自動保存':'WINTICKET';
   flog(`✓ ${cars.length}車を取り込みました`,'ok');
   stampUpdated();
   if(!quiet)toast('取り込み完了');
@@ -2170,6 +2195,7 @@ function init(){
   const d=new Date(Date.now()+15*60000);
   $('#closeAt').value=`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
   loadCloudState();
+  setInterval(()=>loadCloudState(true),60000);
 }
 init();
 </script>
